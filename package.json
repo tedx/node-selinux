@@ -1,0 +1,13 @@
+{ "name" : "selinux"
+, "version" : "0.0.1"
+, "author" : "Ted X Toth <txtoth@gmail.com>"
+, "description" : "SELinux bindings for node.js"
+, "scripts" : { "preinstall" : "node-waf configure build" }
+, "main" : "./selinux"
+, "engines" : { "node" : ">0.1.93" }
+, "licenses" :
+  [ { "type" : "MIT"
+    , "url" : "http://github.com/tedx/node-selinux/raw/master/LICENSE"
+    }
+  ]
+}
