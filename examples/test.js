@@ -4,5 +4,4 @@ var sys = require('sys'),
 var s = new selinux.SELinux();
 var con = s.getcon();
 sys.puts(con);
-//s.freecon(con);
 sys.puts(s.getfilecon("./test.js"));

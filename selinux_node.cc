@@ -228,13 +228,16 @@ class SELinux : public EventEmitter {
     }
 
     int fd = args[0]->Int32Value();
-
+    printf("SELinuxGetPeerCon: %d\n", fd);
     char* out;
     int out_size;
 
     int r = selinux->SELinuxGetPeerCon(fd, &out, &out_size);
-    if (r < 0)
+    if (r < 0) {
+      printf("SELinuxGetPeerCon: %d\n", r);
+
       return ThrowException(Exception::Error(String::New("getpeercon failed")));
+    }
 
     if (out_size==0) {
       return String::New("");
