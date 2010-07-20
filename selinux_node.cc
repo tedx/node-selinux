@@ -66,6 +66,58 @@ static int MatchPathCon(eio_req *req) {
   return 0;
 }
 
+struct getpeercon_request {
+  Persistent<Function> cb;
+  security_context_t context;
+  int fd;
+};
+
+static int AfterGetPeerCon(eio_req *req) {
+  ev_unref(EV_DEFAULT_UC);
+
+  struct getpeercon_request * mreq = (struct getpeercon_request *)(req->data);
+
+  HandleScope scope;
+  Local<Value> argv[2];
+
+  if (req->result == -1) {
+    argv[0] = ErrnoException(req->result,
+                               "getpeercon",
+                               "getpeercon failed");
+  } else {
+
+    argv[0] = String::New(mreq->context);
+  }
+
+  TryCatch try_catch;
+
+  mreq->cb->Call(Context::GetCurrent()->Global(), 1, argv);
+
+  if (try_catch.HasCaught()) {
+    FatalException(try_catch);
+  }
+
+  if (mreq->context) free(mreq->context);
+  mreq->cb.Dispose(); // Dispose of the persistent handle
+  free(mreq);
+
+  return 0;
+}
+
+static int GetPeerCon(eio_req *req) {
+  // Note: this function is executed in the thread pool! CAREFUL
+  struct getpeercon_request * mreq = (struct getpeercon_request *) req->data;
+  security_context_t context = NULL;    /* security context */
+
+  int ret = getpeercon(mreq->fd, &context);
+  if (ret == 0) {
+      mreq->context = strdup(context);
+      freecon(context);
+  }
+  req->result = ret;
+  return 0;
+}
+
 
 class SELinux : public EventEmitter {
  public:
@@ -275,29 +327,37 @@ class SELinux : public EventEmitter {
 
   static Handle<Value>
   SELinuxGetPeerCon(const Arguments& args) {
-    SELinux *selinux = ObjectWrap::Unwrap<SELinux>(args.This());
 
-    HandleScope scope;
-
-    if (args.Length() < 1 || !args[0]->IsInt32()) {
-      return ThrowException(Exception::Error(String::New("Must supply a filedescriptor.")));
+    if (args.Length() < 2) {
+      return ThrowException(Exception::Error(String::New("Must supply a file descriptor and a callback function.")));
+    } else if (!args[0]->IsInt32()) {
+      return ThrowException(Exception::Error(String::New("Param 1 must be an integer.")));
+    }
+    else if (!args[1]->IsFunction()) {
+      return ThrowException(Exception::Error(String::New("Param 2 must be a callback function.")));
     }
 
     int fd = args[0]->Int32Value();
-    char* out;
-    int out_size;
 
-    int r = selinux->SELinuxGetPeerCon(fd, &out, &out_size);
-    if (r < 0) {
-      return ThrowException(Exception::Error(String::New("getpeercon failed")));
+    Local<Function> cb = Local<Function>::Cast(args[1]);
+
+    struct getpeercon_request *mreq = (struct getpeercon_request *)
+      calloc(1, sizeof(struct getpeercon_request));
+
+    if (!mreq) {
+      V8::LowMemoryNotification();
+      return ThrowException(Exception::Error(
+					     String::New("Could not allocate enough memory")));
     }
 
-    if (out_size==0) {
-      return String::New("");
-    }
-    Local<Value> outString = Encode(out, out_size, BINARY);
-    freecon(out);
-    return scope.Close(outString);
+    mreq->cb = Persistent<Function>::New(cb);
+    mreq->fd = fd;
+
+    eio_custom(GetPeerCon, EIO_PRI_DEFAULT, AfterGetPeerCon, mreq);
+    
+    ev_ref(EV_DEFAULT_UC);
+      
+    return Undefined();
   }
 
   static Handle<Value>
@@ -331,9 +391,6 @@ class SELinux : public EventEmitter {
 
   static Handle<Value>
   SELinuxMatchPathCon(const Arguments& args) {
-    SELinux *selinux = ObjectWrap::Unwrap<SELinux>(args.This());
-
-    HandleScope scope;
 
     if (args.Length() < 2) {
       return ThrowException(Exception::Error(String::New("Must supply a file path and a callback function.")));
