@@ -1,10 +1,7 @@
-var sys = require('sys'),
-    selinux = require('../selinux_node');
+var selinux = require('./build/Release/selinux');
 
-var s = new selinux.SELinux();
-var con = s.getcon();
-sys.puts(con);
-sys.puts(s.getfilecon("./test.js"));
-s.matchpathcon("/usr/sbin/NetworkManager", function (context) {
-	sys.puts("matchpathcon of /usr/sbin/NetworkManager: " + context);
-    });
+selx = new selinux.SELinux();
+console.log('context: ' + selx.getcon());
+console.log('raw context: ' + selx.getcon_raw());
+console.log('/etc/selinux/config context: ' + selx.getfilecon('/etc/selinux/config'));
+

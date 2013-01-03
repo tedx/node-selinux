@@ -5,13 +5,13 @@ node-selinux is an libselinux binding for [node.js](http://nodejs.org/).
 
 #### Requirements
 
-     * [node.js](http://nodejs.org/) -- tested with v0.1.100
+     * [node.js](http://nodejs.org/) -- tested with v0.8.16
      * libselinux
 
 #### Build
 To build node-selinux:
 
-	node-waf configure build
+	node-gyp configure build
 
 #### API
 
@@ -22,12 +22,11 @@ Supported methods
 	  * getcon_raw
 	  * setexeccon
 	  * setfscreatecon
-	  * matchpathcon
 
 #### Example
 
-var sys = require('sys'),
-    selinux = require('selinux_node');
+var sys = require('sys');
+var selinux = require('selinux');
 
 var s = new selinux.SELinux();
 var con = s.getcon();
