@@ -5,6 +5,8 @@
 
 #include <v8.h>
 #include <node.h>
+#include <pipe_wrap.h>
+#include <tcp_wrap.h>
 #include <selinux/selinux.h>
 #include <unistd.h>
 #include <errno.h>
@@ -12,6 +14,9 @@
 
 using namespace node;
 using namespace v8;
+using ::v8::String;
+using ::v8::AccessorInfo;
+
 
 #define REQ_FUN_ARG(I, VAR)                                             \
   if (args.Length() <= (I) || !args[I]->IsFunction())                   \
@@ -40,6 +45,7 @@ public:
     NODE_SET_PROTOTYPE_METHOD(s_ct, "getfilecon", GetFileCon);
     NODE_SET_PROTOTYPE_METHOD(s_ct, "setexeccon", SetExecCon);
     NODE_SET_PROTOTYPE_METHOD(s_ct, "setfscreatecon", SetFSCreateCon);
+    NODE_SET_PROTOTYPE_METHOD(s_ct, "setsockcreatecon", SetSockCreateCon);
 
     target->Set(String::NewSymbol("SELinux"),
                 s_ct->GetFunction());
@@ -61,10 +67,18 @@ public:
     return args.This();
   }
 
+  static Handle<Value> GetFd(const Arguments& args) {
+    HandleScope scope;
+
+    Local<Object> obj = args[0]->ToObject();
+    StreamWrap* wrap = static_cast<StreamWrap*>(obj->GetPointerFromInternalField(0));
+    return scope.Close(wrap->GetFD(String::New("fd"), (const v8::AccessorInfo&)NULL));
+  }
+
   static Handle<Value> GetCon(const Arguments& args) {
     HandleScope scope;
     int ret;
-    security_context_t context = NULL;    /* security context */
+    security_context_t context = NULL;
 
     ret = getcon(&context);
     if (ret ==  0) {
@@ -138,6 +152,26 @@ public:
     return Undefined();
   }
 
+  static Handle<Value> SetSockCreateCon(const Arguments& args) {
+    HandleScope scope;
+
+    if (args.Length() < 1) {
+      ThrowException(Exception::Error(String::New("Must supply a security context.")));
+      return Undefined();
+    } else if (!args[0]->IsString()) {
+      ThrowException(Exception::TypeError(String::New("Param must be string.")));
+      return Undefined();
+    }
+
+    String::Utf8Value context_str(args[0]->ToString());
+
+    int ret = setsockcreatecon(*context_str);
+    if (ret != 0) {
+      ThrowException(Exception::Error(String::New("setfscreatecon failed.")));
+    }
+    return Undefined();
+  }
+
   static Handle<Value> SetExecCon(const Arguments& args) {
     HandleScope scope;
     int ret;
@@ -163,10 +197,11 @@ public:
 
   struct getpeercon_baton_t {
     SELinux *hw;
-    int increment_by;
     int fd;
     Persistent<Function> cb;
-    v8::Local<v8::String> con;
+    security_context_t context;
+    char *error_message;
+    bool error;
   };
 
   static Handle<Value> GetPeerCon(const Arguments& args)
@@ -178,63 +213,69 @@ public:
       return scope.Close(Undefined());
     }
 
-    if (!args[0]->IsNumber()) {
-      ThrowException(Exception::TypeError(String::New("Wrong argument type: arg 1 is not a number")));
-      return scope.Close(Undefined());
-    }
-
+    //    if (!args[0]->IsNumber()) {
+    //      ThrowException(Exception::TypeError(String::New("Wrong argument type: arg 1 is not a number")));
+    //      return scope.Close(Undefined());
+    //    }
+    /*    Local<Object> obj = args[0]->ToObject();
+    StreamWrap* wrap = static_cast<StreamWrap*>(obj->GetPointerFromInternalField(0));
+    */
     REQ_FUN_ARG(1, cb);
 
     SELinux* hw = ObjectWrap::Unwrap<SELinux>(args.This());
 
     getpeercon_baton_t *baton = new getpeercon_baton_t();
-    baton->fd = args[0]->IntegerValue();
+    baton->fd = (int)(SELinux::GetFd(args))->Int32Value();
     baton->hw = hw;
-    baton->increment_by = 2;
-    baton->cb = Persistent<Function>::New(cb);
-    
+    baton->error = false;
+
     hw->Ref();
 
-    eio_custom(EIO_GetPeerCon, EIO_PRI_DEFAULT, EIO_AfterGetPeerCon, baton);
-    ev_ref(EV_DEFAULT_UC);
+    uv_work_t *req = new uv_work_t;
+    req->data = baton;
+    baton->cb = Persistent<Function>::New(cb);
+    
+    uv_queue_work(uv_default_loop(), req, CallGetPeerCon, AfterGetPeerCon);
 
     return Undefined();
   }
 
 
-  static int EIO_GetPeerCon(eio_req *req)
+  static void CallGetPeerCon(uv_work_t *req)
   {
     int ret;
-    security_context_t context = NULL;    /* security context */
     getpeercon_baton_t *baton = static_cast<getpeercon_baton_t *>(req->data);
 
-    ret = getpeercon(baton->fd, &context);
-    if (ret == 0) {
-      v8::Local<v8::String> con = String::New((const char *)context);
-      freecon(context);
-      baton->con =  con;
-      return 0;
+    ret = getpeercon(baton->fd, &baton->context);
+    if (ret == -1) {
+      baton->error_message = strerror(errno);
+      baton->error = true;
     }
-
-    ThrowException(Exception::Error(String::New("Error getting peer selinux context")));
-
-    return 0;
   }
 
-  static int EIO_AfterGetPeerCon(eio_req *req)
+  static void AfterGetPeerCon(uv_work_t *req, int)
   {
     HandleScope scope;
     getpeercon_baton_t *baton = static_cast<getpeercon_baton_t *>(req->data);
-    ev_unref(EV_DEFAULT_UC);
     baton->hw->Unref();
-
-    Local<Value> argv[1];
-
-    argv[0] = baton->con;
 
     TryCatch try_catch;
 
-    baton->cb->Call(Context::GetCurrent()->Global(), 1, argv);
+    if (baton->error) {
+        const unsigned argc = 1;
+        Local<Value> argv[argc] = { Exception::Error(String::New(baton->error_message)) };
+	baton->cb->Call(Context::GetCurrent()->Global(), argc, argv);
+    }
+    else {
+        const unsigned argc = 2;
+	Local<String> con = String::New((const char *)baton->context);
+        Local<Value> argv[argc] = {
+            Local<Value>::New(Null()),
+	    con
+        };
+	baton->cb->Call(Context::GetCurrent()->Global(), argc, argv);
+	freecon(baton->context);
+    }
 
     if (try_catch.HasCaught()) {
       FatalException(try_catch);
@@ -243,11 +284,9 @@ public:
     baton->cb.Dispose();
 
     delete baton;
-    return 0;
   }
 
 };
-
 Persistent<FunctionTemplate> SELinux::s_ct;
 
 extern "C" {

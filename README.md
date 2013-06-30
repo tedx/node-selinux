@@ -5,7 +5,7 @@ node-selinux is an libselinux binding for [node.js](http://nodejs.org/).
 
 #### Requirements
 
-     * [node.js](http://nodejs.org/) -- tested with v0.8.16
+     * [node.js](http://nodejs.org/) -- tested with v0.10.3
      * libselinux
 
 #### Build
@@ -21,6 +21,7 @@ Supported methods
 	  * getfilecon
 	  * getcon_raw
 	  * setexeccon
+	  * setsockcreatecon
 	  * setfscreatecon
 
 #### Example
